@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berfarah/xerox/filesort"
 	"github.com/berfarah/xerox/locker"
 )
 
@@ -36,15 +37,15 @@ func New(dir string, fn func(string) string) *Watcher {
 // Start initiates the watcher
 func (w *Watcher) Start() {
 	w.waitGroup.Add(1)
+	go w.logger()
+
+	w.waitGroup.Add(1)
 	go w.producer()
 
 	for i := 0; i < w.maxWorkers; i++ {
 		w.waitGroup.Add(1)
 		go w.worker()
 	}
-
-	w.waitGroup.Add(1)
-	go w.logger()
 }
 
 // Stop watching after executing remaining threads
@@ -71,7 +72,8 @@ func (w *Watcher) producer() {
 
 		// do dir globbing and send to chan
 		matches, _ := filepath.Glob(filepath.Join(w.dir, "/*[^lock]"))
-		for i, file := range matches {
+		sortedByCtime := filesort.New(matches).ByCtime()
+		for i, file := range sortedByCtime {
 			// locked := os.Rename(file, path.Base())
 			if i < 5 {
 				locked := locker.Lock(file)

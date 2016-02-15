@@ -1,20 +1,21 @@
-package filewatcher
+package main
 
 import (
-	"log"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/berfarah/xerox/filesort"
-	"github.com/berfarah/xerox/locker"
+	"github.com/berfarah/xerox/file"
+	"github.com/berfarah/xerox/filelocker"
+	"github.com/berfarah/xerox/logger"
 )
 
 // Watcher is a service
 type Watcher struct {
 	Pulse      chan bool
 	queue      chan string
-	log        chan string
+	logger     *logger.Logger
 	dir        string
 	waitGroup  *sync.WaitGroup
 	maxWorkers int
@@ -27,7 +28,7 @@ func New(dir string, fn func(string) string) *Watcher {
 		Pulse:      make(chan bool),
 		dir:        dir,
 		queue:      make(chan string, 16),
-		log:        make(chan string, 16),
+		logger:     xeroxLogger,
 		waitGroup:  &sync.WaitGroup{},
 		maxWorkers: 8,
 		fn:         fn,
@@ -37,7 +38,12 @@ func New(dir string, fn func(string) string) *Watcher {
 // Start initiates the watcher
 func (w *Watcher) Start() {
 	w.waitGroup.Add(1)
-	go w.logger()
+	go w.logger.Listen(func(s string) {
+		fmt.Println(s, "watcher")
+	},
+		func(l logger.Entry) bool {
+			return l.IsSeverity(1) && l.IsApp("watcher")
+		})
 
 	w.waitGroup.Add(1)
 	go w.producer()
@@ -50,15 +56,9 @@ func (w *Watcher) Start() {
 
 // Stop watching after executing remaining threads
 func (w *Watcher) Stop() {
-	defer close(w.log)
+	w.logger.Stop()
 	close(w.Pulse)
 	w.waitGroup.Wait()
-}
-
-func (w *Watcher) logger() {
-	for message := range w.log {
-		log.Println(message)
-	}
 }
 
 func (w *Watcher) producer() {
@@ -72,11 +72,11 @@ func (w *Watcher) producer() {
 
 		// do dir globbing and send to chan
 		matches, _ := filepath.Glob(filepath.Join(w.dir, "/*[^lock]"))
-		sortedByCtime := filesort.New(matches).ByCtime()
+		sortedByCtime := file.FromArray(matches).ByMtime().ToArray()
 		for i, file := range sortedByCtime {
 			// locked := os.Rename(file, path.Base())
 			if i < 5 {
-				locked := locker.Lock(file)
+				locked := filelocker.Lock(file)
 				w.queue <- locked
 			}
 		}
@@ -92,6 +92,7 @@ func (w *Watcher) worker() {
 
 		// TEMPORARY CODE
 		// time.Sleep(1 * time.Second)
-		w.log <- w.fn(image)
+		str := w.fn(image)
+		w.logger.Info(str, "worker")
 	}
 }
